@@ -1,0 +1,47 @@
+name: Build release AAB
+on:
+  workflow_dispatch:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm install
+      - run: mkdir -p www && cp "$(ls index*.html | head -n 1)" www/index.html
+      - name: Generate Korean audio
+        run: node make-audio.js "$(ls index*.html | head -n 1)" www/audio
+        env:
+          GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
+      - run: npx cap add android
+      - run: mkdir -p resources && cp "$(ls icon-0big.png icon*.png | head -n 1)" resources/icon.png && cp "$(ls splash*.png | head -n 1)" resources/splash.png
+      - run: npx --yes @capacitor/assets generate --android
+      - run: npx cap sync android
+      - run: unzip -o hana-upload-keystore.zip -d ks && cp ks/hana-upload.jks android/app/hana-upload.jks
+      - run: |
+          cat >> android/app/build.gradle <<'EOF'
+          android.signingConfigs {
+              release {
+                  storeFile file("hana-upload.jks")
+                  storePassword System.getenv("KS_PASS")
+                  keyAlias "hana"
+                  keyPassword System.getenv("KS_PASS")
+              }
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          android.defaultConfig.versionCode = 100 + Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
+          android.defaultConfig.versionName = "1.1"
+          EOF
+      - run: cd android && chmod +x gradlew && ./gradlew bundleRelease
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hana-release-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
